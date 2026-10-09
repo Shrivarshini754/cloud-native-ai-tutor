@@ -1,5 +1,9 @@
 import streamlit as st
+import os
 import requests
+
+# Dynamically fetch the backend URL from environment variables (defaults to load_balancer for local Docker)
+BACKEND_URL = os.getenv("BACKEND_API_URL", "http://load_balancer").rstrip("/")
 
 st.set_page_config(page_title="Cloud-Native Adaptive Language Tutor", page_icon="☁️", layout="centered")
 
@@ -23,9 +27,8 @@ if prompt := st.chat_input("Type your message..."):
     with st.chat_message("assistant"):
         with st.spinner("Routing request through cloud load balancer..."):
             try:
-                # Send request to the Nginx load balancer (port 80)
-                # Nginx will automatically round-robin this to backend_1 or backend_2
-                res = requests.post("http://load_balancer/chat", json={"prompt": prompt})
+                # Send request to the configured backend or load balancer
+                res = requests.post(f"{BACKEND_URL}/chat", json={"prompt": prompt})
                 
                 if res.status_code == 200:
                     data = res.json()
