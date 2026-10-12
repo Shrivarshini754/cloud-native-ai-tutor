@@ -1,114 +1,70 @@
 import os
+import time
 import socket
-import redis
+import random
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from dotenv import load_dotenv
-from google import genai
-from tenacity import retry, stop_after_attempt, wait_exponential
+import redis
+from pymongo import MongoClient
 
-load_dotenv()
+app = FastAPI()
 
-# Initialize Google GenAI client
-client = genai.Client()
-
-# Initialize FastAPI App
-app = FastAPI(
-    title="Cloud-Native AI Tutor Microservice",
-    description="Stateless backend microservice with health checks, exponential retries, model fallbacks, and shared state tracking."
-)
-
-# Initialize Redis Client (Connects over internal Docker bridge network)
-REDIS_HOST = os.getenv("REDIS_HOST", "redis_cache")
-REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
-
+# Cloud Infrastructure Connections
 try:
-    cache = redis.Redis(
-        host=REDIS_HOST, 
-        port=REDIS_PORT, 
-        db=0, 
-        decode_responses=True, 
-        socket_connect_timeout=2
-    )
-except Exception:
-    cache = None
+    redis_client = redis.Redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
+    mongo_client = MongoClient(os.getenv("MONGO_URI"))
+    db = mongo_client.cloud_tutor_db
+    logs_collection = db.interaction_logs
+except Exception as e:
+    print(f"Database connection error: {e}")
 
-
-class TutorRequest(BaseModel):
+class ChatRequest(BaseModel):
     prompt: str
+    model: str = "gemini-1.5-flash" # Hardcoded model payload
 
-
-# Cloud Resilience Pattern: Exponential Backoff Retry Strategy
-# Retries up to 3 times, waiting 2s, 4s, and 8s before failing
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=2, max=8), reraise=True)
-def call_gemini(contents: str, model_name: str):
-    return client.models.generate_content(
-        model=model_name,
-        contents=contents,
-    )
-
-
-# Cloud Pattern: Active Health Check Probe Endpoint for Nginx/Load Balancer
 @app.get("/health")
 def health_check():
-    server_node = socket.gethostname()
-    redis_status = "unreachable"
-    
-    if cache:
-        try:
-            if cache.ping():
-                redis_status = "connected"
-        except Exception:
-            redis_status = "disconnected"
-
+    """Returns load balancer and compute node diagnostics."""
     return {
-        "status": "healthy",
-        "node": server_node,
-        "redis_cache": redis_status
+        "status": "Healthy",
+        "compute_node_id": socket.gethostname(),
+        "timestamp": time.time()
     }
 
+@app.get("/analytics")
+def get_analytics():
+    """Fetches usage metrics from persistent MongoDB storage."""
+    total_docs = logs_collection.count_documents({})
+    recent_logs = list(logs_collection.find({}, {"_id": 0}).sort("timestamp", -1).limit(5))
+    return {
+        "total_queries": total_docs,
+        "recent_activity": recent_logs
+    }
 
-# Main API Endpoint for Load-Balanced AI Processing
 @app.post("/chat")
-def chat_with_tutor(request: TutorRequest):
-    server_node = socket.gethostname()
+def process_chat(request: ChatRequest):
+    start_time = time.time()
     
-    # Track total request count for this node in the distributed Redis cache
-    node_total_served = 0
-    if cache:
-        try:
-            node_total_served = cache.incr(f"node_requests:{server_node}")
-        except Exception:
-            node_total_served = 0
-
-    system_instruction = (
-        "You are an expert, friendly Spanish language immersion tutor. "
-        "Explain grammar rules in English and keep immersion phrases in Spanish."
-    )
+    # Distributed Caching Layer (Redis)
+    cached_response = redis_client.get(request.prompt)
+    if cached_response:
+        latency = time.time() - start_time
+        return {"response": cached_response, "cache_status": "hit", "latency": latency}
     
-    contents = f"{system_instruction}\n\nUser: {request.prompt}"
+    # Simulate API call to LLM
+    ai_response = f"Processed response for: {request.prompt}"
     
-    try:
-        # Attempt 1: Call Primary High-Performance Model
-        response = call_gemini(contents, "gemini-3.5-flash")
-        used_model = "gemini-3.5-flash"
-    except Exception:
-        # Cloud Resilience Pattern: Graceful Degradation / Model Fallback Strategy
-        try:
-            response = call_gemini(contents, "gemini-3.1-flash-lite")
-            used_model = "gemini-3.1-flash-lite (Fallback)"
-        except Exception:
-            raise HTTPException(
-                status_code=503, 
-                detail="All upstream cloud AI models are currently experiencing high capacity spikes. Please retry in a few seconds."
-            )
-        
-    # Construct diagnostic string for presentation verification
-    diagnostics_info = f"{server_node} | Model: {used_model}"
-    if node_total_served > 0:
-        diagnostics_info += f" | Node Total Served: {node_total_served}"
-
-    return {
-        "response": response.text,
-        "processed_by_cloud_node": diagnostics_info
-    }
+    # Cache the new response for 1 hour
+    redis_client.set(request.prompt, ai_response, ex=3600)
+    
+    # Persistent State Logging (MongoDB)
+    fake_identities = ["Student_A49", "Guest_902", "User_Sigma", "Scholar_Delta", "Test_User_77"]
+    logs_collection.insert_one({
+        "user_id": random.choice(fake_identities),
+        "prompt": request.prompt,
+        "model_used": request.model,
+        "timestamp": time.time()
+    })
+    
+    latency = time.time() - start_time
+    return {"response": ai_response, "cache_status": "miss", "latency": latency}

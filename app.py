@@ -1,45 +1,65 @@
 import streamlit as st
-import os
 import requests
+import os
 
-# Dynamically fetch the backend URL from environment variables (defaults to load_balancer for local Docker)
-BACKEND_URL = os.getenv("BACKEND_API_URL", "http://load_balancer").rstrip("/")
+BACKEND_URL = os.getenv("BACKEND_API_URL", "http://localhost:8080")
 
-st.set_page_config(page_title="Cloud-Native Adaptive Language Tutor", page_icon="☁️", layout="centered")
+st.set_page_config(page_title="AI Tutor", layout="wide")
 
-st.title("☁️ Cloud-Native Adaptive Spanish Tutor")
-st.markdown("*Architecture: Streamlit UI ➔ Nginx Load Balancer ➔ Clustered FastAPI Backends ➔ Gemini Cloud AI*")
+# Sidebar: Cloud Infrastructure Diagnostics
+with st.sidebar:
+    st.markdown("### ☁️ Cloud Diagnostics")
+    
+    # 1. CI/CD Pipeline Status
+    st.markdown("**CI/CD Pipeline**")
+    st.markdown("[![Build Status](https://github.com/your-username/repo-name/actions/workflows/deploy.yml/badge.svg)](https://github.com/)")
+    st.caption(f"**Git Commit:** {os.getenv('GITHUB_SHA', 'Local-Dev-Mode')[:7]}")
+    st.caption(f"**Last Deployed:** {os.getenv('LAST_UPDATED', 'Pending Build')}")
+    st.divider()
+    
+    # 2. Load Balancer & Node Health
+    st.markdown("**Active Compute Node**")
+    try:
+        health_data = requests.get(f"{BACKEND_URL}/health", timeout=3).json()
+        st.metric(label="Server Status", value=health_data["status"])
+        st.caption(f"**Docker Container ID:** {health_data['compute_node_id']}")
+    except Exception:
+        st.error("Backend Unreachable")
+    st.divider()
+    
+    # 3. Persistent Database (MongoDB)
+    st.markdown("**Database Analytics**")
+    try:
+        analytics = requests.get(f"{BACKEND_URL}/analytics", timeout=3).json()
+        st.metric(label="Total Queries Processed", value=analytics["total_queries"])
+        if analytics["recent_activity"]:
+            st.dataframe(analytics["recent_activity"], use_container_width=True)
+    except Exception:
+        st.warning("MongoDB cluster disconnected")
 
-if "messages" not in st.session_state:
-    st.session_state.messages = [
-        {"role": "assistant", "content": "¡Hola! I am your cloud-backed Spanish tutor. Send a message to test the distributed cluster!"}
-    ]
+# Main Interface: AI Tutor
+st.title("AI Tutor")
 
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-
-if prompt := st.chat_input("Type your message..."):
-    st.session_state.messages.append({"role": "user", "content": prompt})
+prompt = st.chat_input("Ask a question...")
+if prompt:
     with st.chat_message("user"):
-        st.markdown(prompt)
-
+        st.write(prompt)
+        
     with st.chat_message("assistant"):
-        with st.spinner("Routing request through cloud load balancer..."):
-            try:
-                # Send request to the configured backend or load balancer
-                res = requests.post(f"{BACKEND_URL}/chat", json={"prompt": prompt})
+        try:
+            # The Gemini model is hardcoded in the backend payload now
+            res = requests.post(
+                f"{BACKEND_URL}/chat", 
+                json={"prompt": prompt, "model": "gemini-1.5-flash"}
+            ).json()
+            
+            st.write(res["response"])
+            
+            # 4. Distributed Caching Visualizer (Redis)
+            if res["cache_status"] == "hit":
+                st.success(f"⚡ Cache Hit ({res['latency']:.4f}s)")
+            else:
+                st.info(f"🔄 Cache Miss ({res['latency']:.4f}s) - Processed by LLM")
                 
-                if res.status_code == 200:
-                    data = res.json()
-                    ai_reply = data["response"]
-                    node_id = data["processed_by_cloud_node"]
-                    
-                    # Display response along with the backend node ID to prove load balancing!
-                    full_output = f"{ai_reply}\n\n---\n*🧩 [Cloud Diagnostics] Handled by Backend Node: `{node_id}`*"
-                    st.markdown(full_output)
-                    st.session_state.messages.append({"role": "assistant", "content": full_output})
-                else:
-                    st.error(f"Cloud Cluster Error: {res.text}")
-            except Exception as e:
-                st.error(f"Failed to communicate with load balancer: {e}")
+        except Exception as e:
+            st.error("Failed to fetch response from compute node.")

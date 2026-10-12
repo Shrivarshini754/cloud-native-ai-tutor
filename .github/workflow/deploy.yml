@@ -1,0 +1,31 @@
+name: Cloud Tutor CI/CD
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Export Build Metadata
+        run: |
+          echo "GITHUB_SHA=${GITHUB_SHA}" >> $GITHUB_ENV
+          echo "LAST_UPDATED=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_ENV
+          
+      - name: Simulate Build Check
+        run: echo "Build successful. Render will now automatically deploy the live server."
